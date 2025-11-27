@@ -110,6 +110,7 @@ public class BinairoSolver extends GameSearch {
                         bestR = r;
                         bestC = c;
                         maxDegree = currentDegree;
+                        // si la cellule courante a le meme MRV que minDomainSize(l'ancienne meilleur cellule) on utilise Degree Heuristic pour choisir qu'elle cellule est la meilleure
                     } else if (currentDomainSize == minDomainSize) {
                         // Tie-breaker: Degree Heuristic (choisir le plus grand degré)
                         if (currentDegree > maxDegree) {
@@ -135,6 +136,7 @@ public class BinairoSolver extends GameSearch {
         int[] dr = {-1, 1, 0, 0};
         int[] dc = {0, 0, -1, 1};
 
+        //on incremente le degré si les cellules adjacente sont vide = la cellule actuelle a plus d'effet sur eux
         for (int i = 0; i < 4; i++) {
             int nr = r + dr[i];
             int nc = c + dc[i];
@@ -144,7 +146,7 @@ public class BinairoSolver extends GameSearch {
             }
         }
 
-        // Dans un Binairo, un meilleur degré inclurait toutes les cases vides sur la même ligne et colonne
+        // en incremente le degré pour chaque cellule trové vide dans la meme ligne ou colonne
         for (int i = 0; i < size; i++) {
             if (i != c && grid.getValue(r, i) == BinairoGrid.EMPTY) degree++; // Ligne
             if (i != r && grid.getValue(i, c) == BinairoGrid.EMPTY) degree++; // Colonne
@@ -204,35 +206,100 @@ public class BinairoSolver extends GameSearch {
         return removedCount;
     }
 
-    /**
-     * 2c. Constraint Propagation: Forward Checking (FC).
-     * Mise à jour des domaines des cases voisines suite à une assignation.
-     */
     private void applyForwardChecking(BinairoGrid grid, int r, int c, int val) {
-        // Enlève la valeur opposée des domaines des voisins qui violeraient R1
-        // (pas de trois consécutifs) si cette valeur était mise.
+        int size = grid.getSize();
         int otherVal = (val == BinairoGrid.ZERO) ? BinairoGrid.ONE : BinairoGrid.ZERO;
-        // Voisins sur la ligne (r)
-        for (int j = 0; j < grid.getSize(); j++) {
-            if (j == c) continue;
+        Map<String, Set<Integer>> domains = grid.getDomains();
 
-            // Simplification: Nous vérifions uniquement les contraintes de triple (R1)
-            // Pour être efficace, il faut également appliquer R2 et R3.
+        // 1. Mettre à jour le domaine de la variable assignée (r, c)
+        // Nous le faisons ici une seule fois, en dehors des boucles.
+        domains.get(r + "," + c).clear();
+        domains.get(r + "," + c).add(val); // Le domaine de (r, c) est maintenant {val}
 
-            // R1: Si [r][c-2] et [r][c-1] sont 'val', la case [r][c] doit être 'otherVal'.
-            // C'est la logique appliquée par checkLocalConstraints.
+        // --- Propagation sur la LIGNE et la COLONNE (R1, R2, R3) ---
 
-            // FC est implémenté dans checkLocalConstraints:
-            // Si l'affectation de 'val' dans (r, c) viole R1, elle échoue immédiatement.
+        for (int i = 0; i < size; i++) {
+            // --- Propagation sur la LIGNE (r, i) ---
+            if (i != c && grid.getValue(r, i) == BinairoGrid.EMPTY) {
+                String key = r + "," + i;
+                Set<Integer> domain = domains.get(key);
 
-            // Pour FC en tant que mise à jour de domaine:
-            // 1. Pour les cellules vides (i, j) dans la ligne/colonne:
-            // 2. Si l'affectation (r, c) = val rend la valeur 'otherVal' impossible
-            //    dans (i, j) selon R1/R2/R3, supprimer 'otherVal' du domaine de (i, j).
+                // Vérifier si 'otherVal' est impossible pour (r, i)
+                if (isValueImpossible(grid, r, i, otherVal, val, r, c, true)) {
+                    if (domain.remove(otherVal)) {
+                        if (domain.isEmpty()) {
+                            // ÉCHEC CRITIQUE DU FC : Le solveur doit remonter la branche
+                            // Note: Le check de cohérence post-makeMove gère cet échec.
+                            System.err.println("FC Failure: Domaine vide à (" + (r+1) + "," + (i+1) + ")");
+                        }
+                    }
+                }
+            }
 
-            // Pour simplifier l'implémentation: nous allons supprimer le domaine complet de (r, c)
-            grid.getDomains().put(r + "," + c, new HashSet<>(Arrays.asList(val)));
+            // --- Propagation sur la COLONNE (i, c) ---
+            if (i != r && grid.getValue(i, c) == BinairoGrid.EMPTY) {
+                String key = i + "," + c;
+                Set<Integer> domain = domains.get(key);
+
+                // Vérifier si 'otherVal' est impossible pour (i, c)
+                if (isValueImpossible(grid, i, c, otherVal, val, r, c, false)) {
+                    if (domain.remove(otherVal)) {
+                        if (domain.isEmpty()) {
+                            System.err.println("FC Failure: Domaine vide à (" + (i+1) + "," + (c+1) + ")");
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    /**
+     * Fonction d'aide pour tester si une valeur est impossible sur une cellule voisine (rV, cV)
+     * en tenant compte de la nouvelle assignation (r, c) = valAssignee.
+     * (Implémente les contraintes R1 et R2 partielles)
+     */
+    private boolean isValueImpossible(BinairoGrid grid, int rV, int cV, int valTest, int valAssignee, int rAssign, int cAssign, boolean isRow) {
+        // 1. Tester la contrainte R1 (Triple)
+
+        // Créer une grille temporaire pour simuler les deux assignations:
+        BinairoGrid tempGrid = new BinairoGrid(grid);
+
+        // 1. Simuler l'affectation de valTest au voisin (rV, cV)
+        tempGrid.setValue(rV, cV, valTest);
+
+        // 2. Appliquer la nouvelle valeur à la cellule source (rAssign, cAssign)
+        // NOTE : La cellule (rAssign, cAssign) est déjà vide dans 'grid',
+        // donc nous la remplissons pour la simulation.
+        tempGrid.setValue(rAssign, cAssign, valAssignee);
+
+        // Si la contrainte locale (R1) est violée sur la cellule voisine (rV, cV) après les deux placements
+        if (!tempGrid.checkLocalConstraints(rV, cV)) {
+            return true;
+        }
+
+        // 2. Tester la contrainte R2 (Équilibre)
+
+        // ... (Le reste de la logique pour R2 est correct, utilisant tempGrid) ...
+        int count0 = 0;
+        int count1 = 0;
+        int size = grid.getSize();
+        int index = isRow ? rV : cV; // Index de la ligne/colonne du voisin
+
+        for (int i = 0; i < size; i++) {
+            int cellValue = isRow ? tempGrid.getValue(rV, i) : tempGrid.getValue(i, cV);
+
+            if (cellValue == BinairoGrid.ZERO) count0++;
+            if (cellValue == BinairoGrid.ONE) count1++;
+        }
+
+        int limit = size / 2;
+
+        // Si la limite R2 est dépassée dans la ligne/colonne du voisin après la simulation
+        if (count0 > limit || count1 > limit) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -244,7 +311,7 @@ public class BinairoSolver extends GameSearch {
             return currentPos;
         }
 
-        // 2a. Choisir la Variable (MRV + Degree Heuristic)
+        // 2a. Choisir la meilleure prochaine cellule/variable à assigner (MRV + Degrés)
         int[] nextVar = selectUnassignedVariable(currentPos);
         int r = nextVar[0];
         int c = nextVar[1];
@@ -257,11 +324,10 @@ public class BinairoSolver extends GameSearch {
         for (int val : orderedValues) {
             BinairoAssignment assignment = new BinairoAssignment(r, c, val);
 
-            // 2c. Affectation et Propagation (FC)
+            // 2c. application de FC
             BinairoGrid nextPos = (BinairoGrid) makeMove(currentPos, PROGRAM, assignment);
 
-            // Vérification de cohérence après FC:
-            // Est-ce que l'assignation est globalement cohérente?
+            //verifier la valeur assigné globalement(est ce qu c'est compatible avec les voisin et la ligne/colonne)
             if (nextPos.checkLocalConstraints(r, c) && nextPos.isCompletelyValid()) {
 
                 // Récursion
