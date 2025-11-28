@@ -6,14 +6,27 @@ import java.util.concurrent.TimeUnit;
 
 public class BinairoSolver extends GameSearch {
 
-    // --- Adaptation de GameSearch pour le CSP ---
+    private boolean useMVR;
+    private boolean useDegree;
+    private boolean useLCV;
+    private boolean useAC3;
+    private boolean useFC;
 
-    // Note: Pour un CSP, ces méthodes n'ont qu'une pertinence limitée,
-    // car Alpha-Beta n'est pas utilisé. Nous nous concentrons sur les méthodes
-    // nécessaires pour le Backtracking manuel et automatique.
+    // --- Métriques de Performance ---
+    private long nodesVisited;
+    private long startTime;
+    private long endTime;
 
-    @Override
-    public boolean drawnPosition(GridState p) { return false; }
+    /**
+     * Configure les heuristiques à utiliser pour la prochaine résolution.
+     */
+    public void configureSolver(boolean useMVR, boolean useDegree, boolean useLCV, boolean useAC3, boolean useFC) {
+        this.useMVR = useMVR;
+        this.useDegree = useDegree;
+        this.useLCV = useLCV;
+        this.useAC3 = useAC3;
+        this.useFC = useFC;
+    }
 
     @Override
     public boolean wonPosition(GridState p, boolean player) {
@@ -28,6 +41,36 @@ public class BinairoSolver extends GameSearch {
     public void printPosition(GridState p) {
         System.out.println(((BinairoGrid)p).display());
     }
+
+    /**
+     * Vérifie si la grille initiale est résoluble en lançant le solveur CSP.
+     * @return La solution trouvée (BinairoGrid) si résoluble, sinon null.
+     */
+    public BinairoGrid checkResolvability(BinairoGrid initial) {
+        BinairoGrid tempGrid = new BinairoGrid(initial);
+
+        // Réinitialisation des métriques
+        this.nodesVisited = 0;
+        this.startTime = System.nanoTime();
+
+        // 1. PHASE DE PRÉTRAITEMENT AC-3 (OPTIONNEL)
+        if (this.useAC3) {
+            initialAC3(tempGrid);
+        }
+
+        // 2. VÉRIFICATION D'ÉCHEC AC-3/VALIDITÉ
+        if (!tempGrid.isCompletelyValid()) {
+            System.err.println("La grille est devenue incohérente après la vérification initiale (AC-3/Validité).");
+            return null;
+        }
+
+        // 3. PHASE DE RECHERCHE
+        BinairoGrid result = cspBacktracking(tempGrid);
+        this.endTime = System.nanoTime();
+
+        return result;
+    }
+
 
     @Override
     public CellAssignment createMove() {
@@ -46,12 +89,6 @@ public class BinairoSolver extends GameSearch {
         }
     }
 
-    @Override
-    public GridState[] possibleMoves(GridState p, boolean player) {
-        // Cette méthode est surchargée par 'cspBacktracking' pour implémenter
-        // les heuristiques avancées (MRV, Degree, LCV, FC).
-        return new GridState[0];
-    }
 
     @Override
     public GridState makeMove(GridState p, boolean player, CellAssignment assignment) {
@@ -61,29 +98,86 @@ public class BinairoSolver extends GameSearch {
         BinairoGrid nextPos = new BinairoGrid(currentPos);
         nextPos.setValue(a.row, a.col, a.value);
 
-        // Appliquer Forward Checking (FC) / Mise à jour des domaines
-        applyForwardChecking(nextPos, a.row, a.col, a.value);
+        // --- Forward Checking (FC) si useFC est true
+        if (this.useFC) {
+            // Seule la propagation des contraintes sur les voisins a lieu si FC est activé.
+            applyForwardChecking(nextPos, a.row, a.col, a.value);
+        }
 
         return nextPos;
     }
 
-    @Override
-    public boolean reachedMaxDepth(GridState p, int depth) {
-        return ((BinairoGrid)p).isFull();
-    }
 
-    // --- Implémentation des Heuristiques et de la Résolution CSP ---
 
     /**
-     * 1. Preprocessing: Applique AC-3 une seule fois.
+     * Algorithme de Prétraitement AC-3 (Arc Consistency 3).
+     * Réduit les domaines des variables non assignées jusqu'à atteindre un point fixe.
      */
     public void initialAC3(BinairoGrid grid) {
-        // Pour Binairo, l'AC-3 se réduit souvent aux contraintes de "pas de trois consécutifs"
-        // car les autres contraintes (R2, R3) sont globales.
-        // Simplifié ici pour l'exemple: AC-3 est déjà partiellement couvert par l'inférence
-        // locale de FC dans le backtracking et par la vérification de contraintes.
-        // Une implémentation complète d'AC-3 serait très complexe ici.
-        // Nous nous concentrons sur la puissance du backtracking avec MVR/LCV/FC.
+        System.out.println("  [AC-3] Démarrage du prétraitement...");
+        boolean domainReduced;
+        int passCount = 0;
+
+        // Boucle principale AC-3 : Répéter tant que des réductions de domaine se produisent
+        do {
+            domainReduced = false;
+            passCount++;
+            int size = grid.getSize();
+            Map<String, Set<Integer>> domains = grid.getDomains();
+
+            // Itérer sur TOUTES les cellules de la grille (arcs)
+            for (int r = 0; r < size; r++) {
+                for (int c = 0; c < size; c++) {
+
+                    if (grid.getValue(r, c) == BinairoGrid.EMPTY) {
+                        // Si la cellule est vide, tester sa cohérence avec tous ses voisins
+
+                        // Si le domaine d'une cellule est réduit, nous devons
+                        // re-tester ses voisins dans la prochaine passe.
+
+                        Set<Integer> currentDomain = domains.get(r + "," + c);
+                        Set<Integer> toRemove = new HashSet<>();
+
+                        // Pour chaque valeur possible dans le domaine de (r, c)
+                        for (int valTest : currentDomain) {
+
+                            // Créer une simulation locale pour cette vérification
+                            BinairoGrid tempGrid = new BinairoGrid(grid);
+                            tempGrid.setValue(r, c, valTest); // Simuler l'assignation de valTest
+
+                            // Vérification R1/R2 pour cette assignation simulée
+                            if (!tempGrid.checkLocalConstraints(r, c) ||
+                                    !tempGrid.checkPartialBalance(r, true) ||
+                                    !tempGrid.checkPartialBalance(c, false)) {
+
+                                // Si valTest viole R1 ou R2, elle doit être supprimée du domaine
+                                toRemove.add(valTest);
+                            }
+                        }
+
+                        // Appliquer les suppressions
+                        if (!toRemove.isEmpty()) {
+                            currentDomain.removeAll(toRemove);
+                            domainReduced = true;
+                            // Si un domaine vide est créé, la grille est impossible.
+                            if (currentDomain.isEmpty()) {
+                                System.err.println("  [AC-3] Échec : Domaine vide détecté à (" + (r+1) + "," + (c+1) + ")");
+                                // Dans ce cas, on pourrait s'arrêter, mais laisser la boucle
+                                // finir pour un nettoyage complet de l'état.
+                                return; // Arrêt précoce
+                            }
+                        }
+                    } else {
+                        // Si la cellule est remplie, nous pouvons l'utiliser pour contraindre ses voisins.
+                        // Cette logique est déjà couverte par l'itération des autres cellules vides,
+                        // mais on peut l'intégrer ici pour une version plus pure de AC-3 si nécessaire.
+                        // Pour le Binairo, simplifier la propagation est plus simple.
+                    }
+                }
+            }
+        } while (domainReduced);
+
+        System.out.println("  [AC-3] Terminé en " + passCount + " passes. Domaines réduits.");
     }
 
     /**
@@ -101,23 +195,46 @@ public class BinairoSolver extends GameSearch {
                     Set<Integer> domain = grid.getDomains().get(r + "," + c);
                     int currentDomainSize = domain.size();
 
-                    // Calculer l'Heuristique de Degré (nombre de contraintes avec des variables non assignées)
-                    int currentDegree = calculateDegree(grid, r, c);
+                    // Calculer l'Heuristique de Degré SEULEMENT si nécessaire
+                    int currentDegree = 0;
+                    if (useDegree) {
+                        currentDegree = calculateDegree(grid, r, c);
+                    } else if (!useMVR) {
+                        // Si ni MVR ni Degré ne sont utilisés, on utilise la première variable trouvée (BT pur)
+                        return new int[]{r, c};
+                    }
 
-                    if (currentDomainSize < minDomainSize) {
-                        // MRV: trouver le plus petit domaine
+                    // --- Logique d'application de MVR ---
+                    if (useMVR && currentDomainSize < minDomainSize) {
                         minDomainSize = currentDomainSize;
                         bestR = r;
                         bestC = c;
                         maxDegree = currentDegree;
-                        // si la cellule courante a le meme MRV que minDomainSize(l'ancienne meilleur cellule) on utilise Degree Heuristic pour choisir qu'elle cellule est la meilleure
-                    } else if (currentDomainSize == minDomainSize) {
-                        // Tie-breaker: Degree Heuristic (choisir le plus grand degré)
-                        if (currentDegree > maxDegree) {
+                    } else if (useMVR && currentDomainSize == minDomainSize) {
+                        // Égalité MRV
+                        if (useDegree && currentDegree > maxDegree) {
+                            // Départage par Degré (si activé)
                             bestR = r;
                             bestC = c;
                             maxDegree = currentDegree;
                         }
+                    }
+
+                    // --- Logique si MVR est désactivé (utiliser Degré comme critère principal ou BT pur) ---
+                    else if (!useMVR) {
+                        if (useDegree && currentDegree > maxDegree) {
+                            maxDegree = currentDegree;
+                            bestR = r;
+                            bestC = c;
+                        }
+                    }
+
+                    // Si MVR est activé, nous devons initialiser le premier trouvé si on n'a rien encore.
+                    if (bestR == -1) {
+                        minDomainSize = currentDomainSize;
+                        bestR = r;
+                        bestC = c;
+                        maxDegree = currentDegree;
                     }
                 }
             }
@@ -161,20 +278,26 @@ public class BinairoSolver extends GameSearch {
      */
     private List<Integer> getLCVOrderedValues(BinairoGrid grid, int r, int c) {
         Set<Integer> domain = grid.getDomains().get(r + "," + c);
+
+        if (!useLCV) {
+            // Si LCV est désactivé, retourne l'ordre par défaut (0, 1)
+            List<Integer> defaultOrder = new ArrayList<>(domain);
+            defaultOrder.sort(null); // Ordre numérique (0 puis 1)
+            return defaultOrder;
+        }
+
+        // Si LCV est activé, exécute l'ordre LCV
         Map<Integer, Integer> constraintsCount = new HashMap<>();
 
         for (int val : domain) {
-            // Créer une position temporaire pour simuler l'assignation
             BinairoGrid tempGrid = new BinairoGrid(grid);
             tempGrid.setValue(r, c, val);
-
-            // Compter combien d'options sont éliminées pour les voisins si 'val' est choisi.
+            // countRemovedOptionsByAssignment doit être implémenté pour simuler la réduction des domaines
             int removedOptions = countRemovedOptionsByAssignment(tempGrid, r, c, val);
             constraintsCount.put(val, removedOptions);
         }
 
         List<Integer> sortedValues = new ArrayList<>(domain);
-        // Trier par ordre croissant du nombre de contraintes (LCV: Least Constraining Value)
         sortedValues.sort(Comparator.comparingInt(constraintsCount::get));
 
         return sortedValues;
@@ -211,16 +334,15 @@ public class BinairoSolver extends GameSearch {
         int otherVal = (val == BinairoGrid.ZERO) ? BinairoGrid.ONE : BinairoGrid.ZERO;
         Map<String, Set<Integer>> domains = grid.getDomains();
 
-        // 1. Mettre à jour le domaine de la variable assignée (r, c)
-        // Nous le faisons ici une seule fois, en dehors des boucles.
+        // 1.la valeur est deja assigné , son domaine ne doit plus etre {1,2},c'est pour ca on Mettre à jour le domaine de la variable assignée (r, c) ici
         domains.get(r + "," + c).clear();
         domains.get(r + "," + c).add(val); // Le domaine de (r, c) est maintenant {val}
 
         // --- Propagation sur la LIGNE et la COLONNE (R1, R2, R3) ---
 
-        for (int i = 0; i < size; i++) {
+        for (int i = 0; i < size; i++) {// i vas etre utilisé pour iterer sur les lignes en premier temps(premier condition) et puis les colonnes(deuxiemme condition)
             // --- Propagation sur la LIGNE (r, i) ---
-            if (i != c && grid.getValue(r, i) == BinairoGrid.EMPTY) {
+            if (i != c && grid.getValue(r, i) == BinairoGrid.EMPTY) {//i!=c pour ne pas traiter la cellule qui voient d'etre assigné
                 String key = r + "," + i;
                 Set<Integer> domain = domains.get(key);
 
@@ -259,7 +381,6 @@ public class BinairoSolver extends GameSearch {
      * (Implémente les contraintes R1 et R2 partielles)
      */
     private boolean isValueImpossible(BinairoGrid grid, int rV, int cV, int valTest, int valAssignee, int rAssign, int cAssign, boolean isRow) {
-        // 1. Tester la contrainte R1 (Triple)
 
         // Créer une grille temporaire pour simuler les deux assignations:
         BinairoGrid tempGrid = new BinairoGrid(grid);
@@ -269,66 +390,69 @@ public class BinairoSolver extends GameSearch {
 
         // 2. Appliquer la nouvelle valeur à la cellule source (rAssign, cAssign)
         // NOTE : La cellule (rAssign, cAssign) est déjà vide dans 'grid',
-        // donc nous la remplissons pour la simulation.
+        // nous la remplissons pour la simulation.
         tempGrid.setValue(rAssign, cAssign, valAssignee);
 
+        // --- 1. Tester la contrainte R1 (Triple) ---
         // Si la contrainte locale (R1) est violée sur la cellule voisine (rV, cV) après les deux placements
         if (!tempGrid.checkLocalConstraints(rV, cV)) {
-            return true;
+            return true; // R1 est violée, valTest est impossible
         }
 
-        // 2. Tester la contrainte R2 (Équilibre)
+        // --- 2. Tester la contrainte R2 (Équilibre / Partial Balance) ---
 
-        // ... (Le reste de la logique pour R2 est correct, utilisant tempGrid) ...
-        int count0 = 0;
-        int count1 = 0;
-        int size = grid.getSize();
-        int index = isRow ? rV : cV; // Index de la ligne/colonne du voisin
+        // Déterminer l'indice de la ligne ou colonne du Voisin (rV, cV) à vérifier.
+        int indexToCheck = isRow ? rV : cV;
 
-        for (int i = 0; i < size; i++) {
-            int cellValue = isRow ? tempGrid.getValue(rV, i) : tempGrid.getValue(i, cV);
-
-            if (cellValue == BinairoGrid.ZERO) count0++;
-            if (cellValue == BinairoGrid.ONE) count1++;
+        /**
+         * Utiliser checkPartialBalance sur la grille temporaire (tempGrid).
+         *
+         * Si checkPartialBalance retourne 'false', cela signifie que la
+         * ligne/colonne de la cellule voisine (rV, cV) dépasse déjà la limite N/2
+         * avec les deux valeurs simulées.
+         */
+        if (!tempGrid.checkPartialBalance(indexToCheck, isRow)) {
+            return true; // R2 est violée, valTest est impossible
         }
 
-        int limit = size / 2;
+        // --- 3. Tester la contrainte R3 (Unicité) ---
+        // Bien que R3 soit normalement vérifié à la fin, on peut faire une vérification partielle ici
+        // si l'une des lignes/colonnes est devenue complète.
+        // Cette étape est généralement coûteuse et souvent omise en FC partiel, mais si nécessaire,
+        // elle devrait être implémentée comme une vérification de l'unicité des lignes complètes dans tempGrid.
 
-        // Si la limite R2 est dépassée dans la ligne/colonne du voisin après la simulation
-        if (count0 > limit || count1 > limit) {
-            return true;
-        }
-
-        return false;
+        return false; // Si aucune contrainte n'est violée, valTest est toujours possible.
     }
 
     /**
      * Algorithme de Backtracking Search avec MRV, Degrés, LCV et FC.
      */
     public BinairoGrid cspBacktracking(BinairoGrid currentPos) {
+        this.nodesVisited++;
+
         // Test de Terminaison
         if (wonPosition(currentPos, PROGRAM)) {
             return currentPos;
         }
 
-        // 2a. Choisir la meilleure prochaine cellule/variable à assigner (MRV + Degrés)
+        // 2a. Choisir la meilleure prochaine cellule/variable à assigner
         int[] nextVar = selectUnassignedVariable(currentPos);
         int r = nextVar[0];
         int c = nextVar[1];
 
-        if (r == -1) return null; // Devrait être capturé par wonPosition
+        if (r == -1) return null;
 
-        // 2b. Ordre des Valeurs (LCV)
+        // 2b. Ordre des Valeurs (LCV ou Ordre par défaut)
         List<Integer> orderedValues = getLCVOrderedValues(currentPos, r, c);
 
         for (int val : orderedValues) {
             BinairoAssignment assignment = new BinairoAssignment(r, c, val);
 
-            // 2c. application de FC
+            // 2c. application de FC (via makeMove)
             BinairoGrid nextPos = (BinairoGrid) makeMove(currentPos, PROGRAM, assignment);
 
-            //verifier la valeur assigné globalement(est ce qu c'est compatible avec les voisin et la ligne/colonne)
-            if (nextPos.checkLocalConstraints(r, c) && nextPos.isCompletelyValid()) {
+            // Vérification de cohérence après FC:
+            if (nextPos.isCompletelyValid()) {
 
                 // Récursion
                 BinairoGrid result = cspBacktracking(nextPos);
@@ -336,12 +460,31 @@ public class BinairoSolver extends GameSearch {
                     return result; // Succès
                 }
             }
-
-            // Backtrack implicite: la boucle passe à la valeur suivante,
-            // ou la fonction retourne 'null' si toutes les valeurs échouent.
         }
 
         return null; // Échec du Backtracking
+    }
+
+    public void displayPerformanceMetrics() {
+        long durationMs = TimeUnit.NANOSECONDS.toMillis(this.endTime - this.startTime);
+
+        // Afficher la configuration de PC utilisée
+        String pcConfig = "";
+        if (this.useAC3) pcConfig += "AC-3 Initial + ";
+        pcConfig += this.useFC ? "FC" : "BT Pur";
+
+        System.out.println("\n===== Comparaison de Performance =====");
+        System.out.println("Configuration : MVR=" + this.useMVR + ", Degrés=" + this.useDegree + ", LCV=" + this.useLCV + ", PC=" + pcConfig);
+        System.out.println("Temps de Résolution : " + durationMs + " ms");
+        System.out.println("Nœuds de Recherche Explorés : " + this.nodesVisited);
+        System.out.println("======================================");
+    }
+
+    public void displaySolution(BinairoGrid initial, BinairoGrid solution) {
+        System.out.println("\n--- Grille Initiale ---");
+        printPosition(initial);
+        System.out.println("\n--- Solution Finale ---");
+        printPosition(solution);
     }
 
     /**

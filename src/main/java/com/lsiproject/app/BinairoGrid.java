@@ -113,6 +113,26 @@ public class BinairoGrid extends GridState implements Serializable {
         return true;
     }
 
+    public boolean checkPartialBalance(int index, boolean isRow) {
+        int count0 = 0;
+        int count1 = 0;
+        int target = size / 2;
+
+        for (int i = 0; i < size; i++) {
+            int val = isRow ? board[index][i] : board[i][index];
+            if (val == ZERO) {
+                count0++;
+            } else if (val == ONE) {
+                count1++;
+            }
+            // Si la limite est dépassée, c'est un échec partiel immédiat
+            if (count0 > target || count1 > target) {
+                return false; // Incohérence R2 détectée
+            }
+        }
+        return true; // Cohérent jusqu'à présent (la vérification finale est faite par checkBalance)
+    }
+
     /**
      * R2: Égalité parfaite (paires) ou différence d'une unité (impaires).
      * Vérifié uniquement si la ligne/colonne est pleine.
