@@ -238,4 +238,24 @@ public class BinairoGrid extends GridState implements Serializable {
         }
         return sb.toString();
     }
+
+    public void resetDomainsForUnassignedCells() {
+        this.domains = new HashMap<>();
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                String key = i + "," + j;
+                Set<Integer> domain = new HashSet<>();
+
+                if (board[i][j] == EMPTY) {
+                    // Pour les cellules vides, le domaine est {0, 1}
+                    domain.add(ZERO);
+                    domain.add(ONE);
+                } else {
+                    // Pour les cellules remplies, le domaine est la valeur assignée
+                    domain.add(board[i][j]);
+                }
+                this.domains.put(key, domain);
+            }
+        }
+    }
 }

@@ -1,10 +1,16 @@
 package com.lsiproject.app;
 
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.io.*;
 import java.util.concurrent.TimeUnit;
 
 public class BinairoSolver extends GameSearch {
+
+    private static final String SAVE_DIRECTORY =
+            System.getProperty("user.home") + File.separator + "BinairoSaves";
 
     private boolean useMVR;
     private boolean useDegree;
@@ -42,15 +48,26 @@ public class BinairoSolver extends GameSearch {
         System.out.println(((BinairoGrid)p).display());
     }
 
+
+    private void resetMetrics() {
+        this.nodesVisited = 0;
+        this.startTime = 0;
+        this.endTime = 0;
+    }
     /**
      * Vérifie si la grille initiale est résoluble en lançant le solveur CSP.
      * @return La solution trouvée (BinairoGrid) si résoluble, sinon null.
      */
     public BinairoGrid checkResolvability(BinairoGrid initial) {
+        // IMPORTANT: Une copie profonde garantit l'isolation de l'état.
         BinairoGrid tempGrid = new BinairoGrid(initial);
 
-        // Réinitialisation des métriques
-        this.nodesVisited = 0;
+        // S'assurer que les domaines sont bien réinitialisés pour la recherche
+        // (crucial si la grille passée était une solution complète d'une exécution précédente)
+        tempGrid.resetDomainsForUnassignedCells();
+
+        // Réinitialisation des métriques avant de commencer (pour un clean start)
+        resetMetrics();
         this.startTime = System.nanoTime();
 
         // 1. PHASE DE PRÉTRAITEMENT AC-3 (OPTIONNEL)
@@ -61,14 +78,96 @@ public class BinairoSolver extends GameSearch {
         // 2. VÉRIFICATION D'ÉCHEC AC-3/VALIDITÉ
         if (!tempGrid.isCompletelyValid()) {
             System.err.println("La grille est devenue incohérente après la vérification initiale (AC-3/Validité).");
+            this.endTime = System.nanoTime(); // Fixe le temps de fin pour la métrique
             return null;
         }
 
         // 3. PHASE DE RECHERCHE
         BinairoGrid result = cspBacktracking(tempGrid);
-        this.endTime = System.nanoTime();
+        this.endTime = System.nanoTime(); // Capture le temps de fin ici
 
         return result;
+    }
+
+    /**
+     * Tente de trouver une case vide dont le domaine a été réduit à une seule valeur (0 ou 1)
+     * grâce à la propagation locale des contraintes.
+     * @param currentGrid La grille actuelle de l'utilisateur.
+     * @return Une BinairoAssignment (r, c, value) si une inférence simple est trouvée, sinon null.
+     */
+    public BinairoAssignment getInferenceSuggestion(BinairoGrid currentGrid) {
+        int size = currentGrid.getSize();
+
+        // Cloner la grille et appliquer une forte propagation locale (similaire à AC-3)
+        // pour voir si cela révèle une assignation forcée.
+        BinairoGrid inferenceGrid = new BinairoGrid(currentGrid);
+
+        boolean domainReduced;
+        int maxIterations = size * size; // Limiter les itérations pour éviter les boucles infinies
+        int currentIteration = 0;
+
+        do {
+            domainReduced = false;
+            currentIteration++;
+
+            // 1. Tenter d'appliquer AC-3 partiel sur l'ensemble de la grille actuelle
+            // Cette logique cherche les cases ayant un domaine de taille 1
+            for (int r = 0; r < size; r++) {
+                for (int c = 0; c < size; c++) {
+                    if (inferenceGrid.getValue(r, c) == BinairoGrid.EMPTY) {
+                        String key = r + "," + c;
+                        Set<Integer> domain = inferenceGrid.getDomains().get(key);
+
+                        // Tester si le domaine contient 0
+                        boolean canBeZero = domain.contains(BinairoGrid.ZERO);
+                        if (canBeZero) {
+                            BinairoGrid testGrid = new BinairoGrid(inferenceGrid);
+                            testGrid.setValue(r, c, BinairoGrid.ZERO);
+
+                            // Si placer ZERO crée une incohérence R1/R2, alors ZERO est impossible pour (r, c)
+                            if (!testGrid.checkLocalConstraints(r, c) ||
+                                    !testGrid.checkPartialBalance(r, true) ||
+                                    !testGrid.checkPartialBalance(c, false)) {
+
+                                if (domain.remove(BinairoGrid.ZERO)) domainReduced = true;
+                                canBeZero = false;
+                            }
+                        }
+
+                        // Tester si le domaine contient 1
+                        boolean canBeOne = domain.contains(BinairoGrid.ONE);
+                        if (canBeOne) {
+                            BinairoGrid testGrid = new BinairoGrid(inferenceGrid);
+                            testGrid.setValue(r, c, BinairoGrid.ONE);
+
+                            // Si placer ONE crée une incohérence R1/R2, alors ONE est impossible pour (r, c)
+                            if (!testGrid.checkLocalConstraints(r, c) ||
+                                    !testGrid.checkPartialBalance(r, true) ||
+                                    !testGrid.checkPartialBalance(c, false)) {
+
+                                if (domain.remove(BinairoGrid.ONE)) domainReduced = true;
+                                canBeOne = false;
+                            }
+                        }
+
+                        // 2. Si un domaine a été réduit à taille 1, retourner cette suggestion
+                        if (domain.size() == 1) {
+                            int value = domain.iterator().next();
+                            return new BinairoAssignment(r, c, value);
+                        }
+
+                        // Si le domaine est vide (incohérence), cela signifie que la grille était déjà irrésoluble,
+                        // mais ici, nous nous arrêtons et ne faisons pas de suggestion.
+                        if (domain.isEmpty()) {
+                            return null;
+                        }
+                    }
+                }
+            }
+
+        } while (domainReduced && currentIteration < maxIterations);
+
+        return null; // Aucune inférence simple n'a pu réduire un domaine à 1
     }
 
 
@@ -465,6 +564,9 @@ public class BinairoSolver extends GameSearch {
         return null; // Échec du Backtracking
     }
 
+    /**
+     * Retourne les métriques de performance pour le console.
+     */
     public void displayPerformanceMetrics() {
         long durationMs = TimeUnit.NANOSECONDS.toMillis(this.endTime - this.startTime);
 
@@ -478,6 +580,36 @@ public class BinairoSolver extends GameSearch {
         System.out.println("Temps de Résolution : " + durationMs + " ms");
         System.out.println("Nœuds de Recherche Explorés : " + this.nodesVisited);
         System.out.println("======================================");
+    }
+
+    /**
+     * Retourne les métriques de performance au format HTML pour affichage dans la GUI.
+     * @return String contenant les métriques.
+     */
+    public String getPerformanceMetrics() {
+        long durationMs = TimeUnit.NANOSECONDS.toMillis(this.endTime - this.startTime);
+
+        // Construire la chaîne de configuration de propagation
+        String pcConfig = "";
+        if (this.useAC3) pcConfig += "AC-3 Initial + ";
+        pcConfig += this.useFC ? "FC" : "BT Pur";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<h2>Comparaison de Performance</h2>");
+        sb.append("<p><b>Configuration :</b></p>");
+        sb.append("<ul>");
+        sb.append("<li><b>MVR:</b> ").append(this.useMVR).append("</li>");
+        sb.append("<li><b>Degrés:</b> ").append(this.useDegree).append("</li>");
+        sb.append("<li><b>LCV:</b> ").append(this.useLCV).append("</li>");
+        sb.append("<li><b>Propagation (PC):</b> ").append(pcConfig).append("</li>");
+        sb.append("</ul>");
+        sb.append("<p><b>Résultats :</b></p>");
+        sb.append("<ul>");
+        sb.append("<li><b>Temps de Résolution :</b> ").append(durationMs).append(" ms</li>");
+        sb.append("<li><b>Nœuds Explorés :</b> ").append(this.nodesVisited).append("</li>");
+        sb.append("</ul>");
+
+        return sb.toString();
     }
 
     public void displaySolution(BinairoGrid initial, BinairoGrid solution) {
@@ -614,5 +746,62 @@ public class BinairoSolver extends GameSearch {
         if (found == 0) {
             System.out.println(" - Aucune suggestion évidente n'a été trouvée.");
         }
+    }
+
+    /**
+     * Sauvegarde l'état actuel de la grille dans un fichier local.
+     * Le nom du fichier inclut l'heure et la taille de la grille.
+     */
+    public String saveGame(BinairoGrid grid) {
+        try {
+            // Créer le répertoire de sauvegarde s'il n'existe pas
+            Files.createDirectories(Paths.get(SAVE_DIRECTORY));
+
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+            String timestamp = sdf.format(new Date());
+            String fileName = String.format("Binairo_%dx%d_%s.ser", grid.getSize(), grid.getSize(), timestamp);
+            File file = new File(SAVE_DIRECTORY, fileName);
+
+            try (FileOutputStream fos = new FileOutputStream(file);
+                 ObjectOutputStream oos = new ObjectOutputStream(fos)) {
+
+                // Sauvegarder la grille
+                oos.writeObject(grid);
+                return fileName;
+            }
+        } catch (Exception e) {
+            System.err.println("Erreur lors de la sauvegarde du jeu: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Charge une grille à partir d'un nom de fichier donné.
+     */
+    public BinairoGrid loadGame(String fileName) {
+        File file = new File(SAVE_DIRECTORY, fileName);
+        if (!file.exists()) return null;
+
+        try (FileInputStream fis = new FileInputStream(file);
+             ObjectInputStream ois = new ObjectInputStream(fis)) {
+
+            BinairoGrid loadedGrid = (BinairoGrid) ois.readObject();
+            return loadedGrid;
+        } catch (Exception e) {
+            System.err.println("Erreur lors du chargement du jeu: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Retourne la liste des fichiers de sauvegarde disponibles.
+     */
+    public String[] listSavedGames() {
+        File dir = new File(SAVE_DIRECTORY);
+        if (!dir.exists() || !dir.isDirectory()) {
+            return new String[0];
+        }
+        // Filtrer uniquement les fichiers .ser
+        return dir.list((d, name) -> name.endsWith(".ser"));
     }
 }
