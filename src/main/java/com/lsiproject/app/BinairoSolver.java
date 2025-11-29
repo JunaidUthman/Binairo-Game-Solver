@@ -405,27 +405,76 @@ public class BinairoSolver extends GameSearch {
     /**
      * Helper pour LCV: Simule le FC et compte les suppressions.
      */
-    private int countRemovedOptionsByAssignment(BinairoGrid grid, int r, int c, int val) {
+    private int countRemovedOptionsByAssignment(BinairoGrid grid, int rAssign, int cAssign, int valAssignee) {
         int removedCount = 0;
         int size = grid.getSize();
 
-        // Simuler l'effet de la contrainte R1 (pas de trois consécutifs) sur les domaines voisins
-        // C'est un test très coûteux, souvent on se contente d'une estimation plus simple.
+        // 1. Créer une seule copie de la grille AVEC l'assignation simulée
+        BinairoGrid tempGrid = new BinairoGrid(grid);
+        tempGrid.setValue(rAssign, cAssign, valAssignee);
 
-        // Simplifié: Compter combien de cases vides sur la même ligne/colonne
-        // ne pourront plus prendre l'autre valeur (la valeur opposée).
+        // 2. Parcourir les voisins non assignés (ligne et colonne) et compter les suppressions
+        for (int rV = 0; rV < size; rV++) {
+            for (int cV = 0; cV < size; cV++) {
 
-        // R1: Si on met 1 à (r,c), et qu'on a déjà 1 à (r, c-1) et (r, c+1) (si vides),
-        // alors la case (r, c+2) ne pourra pas être 1.
+                // Ne vérifier que les cellules vides qui sont sur la même ligne ou colonne que la cellule assignée.
+                if (grid.getValue(rV, cV) == BinairoGrid.EMPTY &&
+                        ((rV == rAssign && cV != cAssign) || (cV == cAssign && rV != rAssign))) {
 
-        // Pour un LCV plus simple et plus efficace:
-        // On vérifie combien de variables adjacentes (dans la même ligne/colonne)
-        // auraient un domaine réduit à 0 par un FC si on faisait ce choix.
+                    String key = rV + "," + cV;
+                    // On utilise le domaine original de 'grid' pour savoir quelles valeurs tester
+                    Set<Integer> domain = grid.getDomains().get(key);
 
-        // On assume que le FC est déjà intégré dans makeMove et que la vérification
-        // de cohérence est faite par checkLocalConstraints.
+                    if (domain == null || domain.isEmpty()) continue;
+
+                    // Tester chaque valeur possible dans le domaine du voisin
+                    for (int valTest : domain) {
+
+                        // Si valTest est rendue impossible par l'assignation valAssignee dans tempGrid
+                        if (isValueImpossibleLCV(tempGrid, rV, cV, valTest)) {
+                            removedCount++; // Une option a été éliminée!
+                        }
+                    }
+                }
+            }
+        }
 
         return removedCount;
+    }
+
+    /**
+     * Fonction d'aide SPÉCIFIQUE AU LCV pour tester si une valeur (valTest) est impossible
+     * pour une cellule voisine (rV, cV) dans une grille (grid) qui a déjà une assignation (rAssign, cAssign) fixée.
+     * * La grille 'grid' passée DOIT contenir l'assignation hypothétique (rAssign, cAssign) = valAssignee.
+     */
+    private boolean isValueImpossibleLCV(BinairoGrid gridWithAssignment, int rV, int cV, int valTest) {
+
+        // Simuler le placement de valTest sur la grille qui contient déjà l'assignation de test
+        BinairoGrid tempGrid = new BinairoGrid(gridWithAssignment);
+        tempGrid.setValue(rV, cV, valTest);
+
+        // --- 1. Tester la contrainte R1 (Triple) ---
+        // Vérifie si la contrainte locale est violée par le nouveau placement de valTest.
+        if (!tempGrid.checkLocalConstraints(rV, cV)) {
+            return true; // R1 est violée
+        }
+
+        // --- 2. Tester la contrainte R2 (Équilibre / Partial Balance) ---
+        // Vérifie si le placement de valTest dépasse la limite N/2 sur la ligne/colonne de rV.
+        if (!tempGrid.checkPartialBalance(rV, true) || !tempGrid.checkPartialBalance(cV, false)) {
+            return true; // R2 est violée
+        }
+
+        // --- 3. Tester la contrainte R3 (Unicité) ---
+        // Si la ligne ou la colonne du voisin devient complète avec valTest, vérifier si elle est unique.
+        if (tempGrid.isRowFull(rV) && !tempGrid.checkDuplicateRow(rV)) {
+            return true; // R3 est violée
+        }
+        if (tempGrid.isColFull(cV) && !tempGrid.checkDuplicateCol(cV)) {
+            return true; // R3 est violée
+        }
+
+        return false; // Si aucune contrainte n'est violée, valTest est toujours possible.
     }
 
     private void applyForwardChecking(BinairoGrid grid, int r, int c, int val) {

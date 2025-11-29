@@ -77,6 +77,7 @@ public class BinairoGUI extends JFrame {
         JComboBox<Integer> sizeSelector = new JComboBox<>(new Integer[]{4, 6, 8, 10, 12});
         sizeSelector.setSelectedItem(gridSize);
         sizeSelector.addActionListener(e -> {
+            // Mise à jour de la taille de la grille de départ
             gridSize = (int) sizeSelector.getSelectedItem();
             resetGrid();
         });
@@ -111,12 +112,15 @@ public class BinairoGUI extends JFrame {
         JButton manualInitButton = new JButton("2. Création Manuelle");
         manualInitButton.addActionListener(e -> setupManualInput());
 
+        JButton exampleButton = new JButton("3. Grille d'Exemple");
+        exampleButton.addActionListener(e -> loadExampleGrid());
 
         JButton helpButton = new JButton("4. Aide / Suggestion");
         helpButton.addActionListener(e -> proposeSuggestion());
 
         actionPanel.add(startButton);
         actionPanel.add(manualInitButton);
+        actionPanel.add(exampleButton);
         actionPanel.add(helpButton);
 
         configPanel.add(actionPanel);
@@ -164,19 +168,47 @@ public class BinairoGUI extends JFrame {
     private void loadExampleGrid() {
         BinairoGrid newGrid = new BinairoGrid(gridSize);
 
-        if (gridSize == 6) {
-            newGrid.setValue(0, 0, 1); newGrid.setValue(0, 3, 0);
-            newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1);
-            newGrid.setValue(2, 4, 0); newGrid.setValue(2, 5, 1);
-            newGrid.setValue(3, 0, 0); newGrid.setValue(3, 2, 1);
-            newGrid.setValue(4, 3, 0); newGrid.setValue(4, 5, 0);
-            newGrid.setValue(5, 1, 1); newGrid.setValue(5, 5, 0);
+        if (gridSize == 6 || gridSize == 8 || gridSize == 10) {
+
+            // Logique de chargement des exemples
+            if (gridSize == 6) {
+                newGrid.setValue(0, 0, 1); newGrid.setValue(0, 3, 0);
+                newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1);
+                newGrid.setValue(2, 4, 0); newGrid.setValue(2, 5, 1);
+                newGrid.setValue(3, 0, 0); newGrid.setValue(3, 2, 1);
+                newGrid.setValue(4, 3, 0); newGrid.setValue(4, 5, 0);
+                newGrid.setValue(5, 1, 1); newGrid.setValue(5, 5, 0);
+            } else if (gridSize == 8) {
+                newGrid.setValue(0, 2, 1); newGrid.setValue(0, 4, 0);
+                newGrid.setValue(1, 1, 0); newGrid.setValue(1, 6, 1);
+                newGrid.setValue(2, 0, 1); newGrid.setValue(2, 5, 0);
+                newGrid.setValue(3, 3, 0); newGrid.setValue(3, 7, 1);
+                newGrid.setValue(4, 0, 0); newGrid.setValue(4, 4, 1);
+                newGrid.setValue(5, 2, 0); newGrid.setValue(5, 7, 1);
+                newGrid.setValue(6, 1, 1); newGrid.setValue(6, 6, 0);
+                newGrid.setValue(7, 3, 1); newGrid.setValue(7, 5, 0);
+            } else if (gridSize == 10) {
+                // Pour la concision, seulement quelques indices 10x10
+                newGrid.setValue(0, 3, 1); newGrid.setValue(0, 7, 0);
+                newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1); newGrid.setValue(1, 9, 0);
+                newGrid.setValue(2, 0, 1); newGrid.setValue(2, 4, 0); newGrid.setValue(2, 8, 1);
+                newGrid.setValue(3, 2, 0); newGrid.setValue(3, 6, 1);
+                newGrid.setValue(4, 1, 1); newGrid.setValue(4, 5, 0); newGrid.setValue(4, 9, 1);
+                newGrid.setValue(5, 0, 0); newGrid.setValue(5, 4, 1); newGrid.setValue(5, 8, 0);
+                newGrid.setValue(6, 2, 1); newGrid.setValue(6, 6, 0);
+                newGrid.setValue(7, 1, 0); newGrid.setValue(7, 5, 1); newGrid.setValue(7, 9, 1);
+                newGrid.setValue(8, 0, 1); newGrid.setValue(8, 4, 0); newGrid.setValue(8, 8, 1);
+                newGrid.setValue(9, 2, 0); newGrid.setValue(9, 6, 1);
+            }
+
             statusLabel.setText("Grille d'exemple " + gridSize + "x" + gridSize + " chargée.");
         } else {
             JOptionPane.showMessageDialog(this, "Aucun exemple prédéfini pour cette taille. Grille vide chargée.");
         }
         currentGrid = newGrid;
         initialDisplayedGrid = new BinairoGrid(newGrid); // Stocke la copie de l'état initial
+        // Assurer que le nouveau 'gridSize' est utilisé
+        this.gridSize = newGrid.getSize();
         displayGrid(currentGrid, true);
     }
 
@@ -257,7 +289,8 @@ public class BinairoGUI extends JFrame {
 
             if (loadedGrid != null) {
                 // Mettre à jour l'état de la GUI
-                gridSize = loadedGrid.getSize();
+                // CRITICAL FIX: Met à jour la variable de classe gridSize avant d'appeler displayGrid
+                this.gridSize = loadedGrid.getSize();
                 currentGrid = loadedGrid;
                 initialDisplayedGrid = new BinairoGrid(loadedGrid); // L'état chargé est le nouvel état initial
                 isManualMode = true; // Une partie chargée est toujours en mode manuel par défaut
@@ -324,6 +357,9 @@ public class BinairoGUI extends JFrame {
         // Mise à jour de l'état initial affiché (au cas où l'utilisateur veut recommencer plus tard)
         initialDisplayedGrid = new BinairoGrid(currentGrid);
 
+        // Mise à jour CRITIQUE de la taille de la grille affichée
+        this.gridSize = currentGrid.getSize();
+
         statusLabel.setText("Mode Manuel: Cliquez sur une case vide pour changer sa valeur (0 ou 1).");
         displayGrid(currentGrid, true);
     }
@@ -336,6 +372,10 @@ public class BinairoGUI extends JFrame {
 
         // Afficher la solution trouvée lors de la validation
         currentGrid = resolution.getSolution();
+
+        // Mise à jour CRITIQUE de la taille de la grille affichée
+        this.gridSize = currentGrid.getSize();
+
         displayGrid(currentGrid, false);
 
         // Rétablissement de la grille initiale après l'affichage de la solution pour un nouveau lancement.
@@ -380,13 +420,15 @@ public class BinairoGUI extends JFrame {
      * Dessine la grille dans le panneau.
      */
     private void displayGrid(BinairoGrid grid, boolean isInteractive) {
-        // La référence currentGrid est mise à jour dans les fonctions handle
-        // Ici on assure juste l'affichage
-        gridPanel.removeAll();
-        gridPanel.setLayout(new GridLayout(gridSize, gridSize));
 
-        for (int r = 0; r < gridSize; r++) {
-            for (int c = 0; c < gridSize; c++) {
+        // FIX CRITICAL: Utiliser la taille réelle de la grille passée, et non la variable de classe.
+        int actualSize = grid.getSize();
+
+        gridPanel.removeAll();
+        gridPanel.setLayout(new GridLayout(actualSize, actualSize));
+
+        for (int r = 0; r < actualSize; r++) {
+            for (int c = 0; c < actualSize; c++) {
                 int val = grid.getValue(r, c);
                 JButton cellButton = new JButton(val == BinairoGrid.EMPTY ? "" : String.valueOf(val));
                 cellButton.setFont(new Font("Arial", Font.BOLD, 20));
