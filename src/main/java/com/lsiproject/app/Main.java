@@ -51,7 +51,7 @@ public class Main {
         int size = promptForGridSize();
         if (size == -1) return;
 
-        solver.configureSolver(false, false, false, false, false);
+        solver.configureSolver(false, false, false, false,false, false);
         GridResolution resolution = promptForGridCreation(size);
 
         if (resolution.isResolvable()) {
@@ -71,7 +71,7 @@ public class Main {
         int size = promptForGridSize();
         if (size == -1) return;
 
-        solver.configureSolver(true, true, true, true, true);
+        solver.configureSolver(true, true, true, true,true, true);
         GridResolution resolution = promptForGridCreation(size);
 
         if (resolution.isResolvable()) {

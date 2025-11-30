@@ -1,12 +1,10 @@
 package com.lsiproject.app;
 
-import java.util.Vector;
-
 /**
  * Classe Abstraite de Base pour les Algorithmes de Recherche.
  * Adaptée de l'exemple initial pour utiliser GridState et CellAssignment.
  */
-public abstract class GameSearch {
+public abstract class CSPSearchBase {
 
     public static final boolean DEBUG = false;
 
@@ -17,7 +15,6 @@ public abstract class GameSearch {
     // --- Méthodes Abstraites à Implémenter ---
 
     public abstract boolean wonPosition(GridState p, boolean player);
-    public abstract float positionEvaluation(GridState p, boolean player);
     public abstract void printPosition(GridState p);
     public abstract GridState makeMove(GridState p, boolean player, CellAssignment assignment);
     public abstract CellAssignment createMove();

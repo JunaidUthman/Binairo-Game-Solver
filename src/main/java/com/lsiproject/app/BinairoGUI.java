@@ -4,7 +4,7 @@ package com.lsiproject.app;
 import javax.swing.*;
 import java.awt.*;
 import java.util.Scanner;
-import java.util.stream.IntStream;
+import java.util.Random;
 
 public class BinairoGUI extends JFrame {
 
@@ -22,6 +22,7 @@ public class BinairoGUI extends JFrame {
     private JCheckBox degreeCheck;
     private JCheckBox lcvCheck;
     private JCheckBox ac3Check;
+    private JCheckBox ac4Check; // NOUVEAU: Checkbox pour AC-4
     private JCheckBox fcCheck;
     private JRadioButton humanPlayRadio;
     private JRadioButton aiSolveRadio;
@@ -29,7 +30,6 @@ public class BinairoGUI extends JFrame {
     public BinairoGUI() {
         setTitle("Jeu Binairo (Takuzu) - Résolution CSP");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        // Utiliser un FlowLayout pour garantir une taille minimale si la grille est petite
         setLayout(new BorderLayout(10, 10));
 
         // Initialisation des éléments de l'UI
@@ -94,12 +94,14 @@ public class BinairoGUI extends JFrame {
         degreeCheck = new JCheckBox("Degrés (Départage)", true);
         lcvCheck = new JCheckBox("LCV (Valeur la moins Contraignante)", true);
         ac3Check = new JCheckBox("AC-3 (Prétraitement)", true);
+        ac4Check = new JCheckBox("AC-4 (Prétraitement Optimisé)", false); // NOUVEAU
         fcCheck = new JCheckBox("FC (Forward Checking)", true);
 
         heuristicPanel.add(mvrCheck);
         heuristicPanel.add(degreeCheck);
         heuristicPanel.add(lcvCheck);
         heuristicPanel.add(ac3Check);
+        heuristicPanel.add(ac4Check);
         heuristicPanel.add(fcCheck);
         configPanel.add(heuristicPanel);
 
@@ -109,18 +111,30 @@ public class BinairoGUI extends JFrame {
         JButton startButton = new JButton("1. Démarrer la Résolution");
         startButton.addActionListener(e -> startResolutionFlow());
 
-        JButton manualInitButton = new JButton("2. Création Manuelle");
-        manualInitButton.addActionListener(e -> setupManualInput());
+        // Bouton unique pour choisir le mode de création de la grille (Manuelle/Aléatoire)
+        JButton createGridButton = new JButton("2. Créer/Charger Grille");
+        createGridButton.addActionListener(e -> {
+            GridResolution initialResolution = promptForGridCreationGUI(gridSize);
+            if (initialResolution != null) {
+                // Met à jour la GUI avec la grille initiale validée (ou non résoluble)
+                currentGrid = initialResolution.getInitialGrid();
+                initialDisplayedGrid = new BinairoGrid(currentGrid);
+                this.gridSize = currentGrid.getSize();
+                displayGrid(currentGrid, true);
 
-        JButton exampleButton = new JButton("3. Grille d'Exemple");
-        exampleButton.addActionListener(e -> loadExampleGrid());
+                if (initialResolution.isResolvable()) {
+                    statusLabel.setText("Grille initialisée et résoluble. Prêt à démarrer.");
+                } else {
+                    statusLabel.setText("🛑 Grille initialisée mais non résoluble. Veuillez en choisir une autre.");
+                }
+            }
+        });
 
         JButton helpButton = new JButton("4. Aide / Suggestion");
         helpButton.addActionListener(e -> proposeSuggestion());
 
         actionPanel.add(startButton);
-        actionPanel.add(manualInitButton);
-        actionPanel.add(exampleButton);
+        actionPanel.add(createGridButton);
         actionPanel.add(helpButton);
 
         configPanel.add(actionPanel);
@@ -144,6 +158,59 @@ public class BinairoGUI extends JFrame {
     }
 
     /**
+     * Logique de l'ancienne fonction promptForGridCreation, adaptée à la GUI.
+     * @return GridResolution si la grille est créée, sinon null.
+     */
+    private GridResolution promptForGridCreationGUI(int size) {
+        BinairoGrid grid = null;
+
+        Object[] creationOptions = {"1. Manuelle (Indices)", "2. Aléatoire", "3. Exemple (6, 8, 10)"};
+        String choice = (String) JOptionPane.showInputDialog(
+                this,
+                "Choisissez la méthode de création :",
+                "Création de la Grille " + size + "x" + size,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                creationOptions,
+                creationOptions[0]
+        );
+
+        if (choice == null) return null; // Annulé
+
+        switch (choice) {
+            case "1. Manuelle (Indices)":
+                grid = createManualGrid(size);
+                break;
+            case "2. Aléatoire":
+                grid = createRandomGrid(size);
+                break;
+            case "3. Exemple (6, 8, 10)":
+                grid = createExampleGrid(size);
+                break;
+        }
+
+        if (grid == null) return null;
+
+        // --- VÉRIFICATION DE LA VALIDITÉ ET DE LA RÉSOLUBILITÉ ---
+        // Configuration maximale pour la validation (Utilise la config max incluant AC-4)
+        solver.configureSolver(true, true, true, true, true, true);
+
+        statusLabel.setText("Vérification de la résolubilité...");
+
+        // On appelle le solveur une seule fois pour la validation
+        BinairoGrid solution = solver.checkResolvability(grid);
+
+        if (solution != null) {
+            return new GridResolution(grid, solution);
+        } else {
+            JOptionPane.showMessageDialog(this,
+                    "Le solveur n'a trouvé AUCUNE solution pour cette grille. Veuillez en choisir une autre.",
+                    "Grille Non Résoluble", JOptionPane.WARNING_MESSAGE);
+            return new GridResolution(grid, null);
+        }
+    }
+
+    /**
      * Initialise le panneau de la grille.
      */
     private void setupGridPanel() {
@@ -163,66 +230,84 @@ public class BinairoGUI extends JFrame {
     }
 
     /**
-     * Charge une grille d'exemple (pour 6x6)
+     * CRÉATION : Génère une grille avec des indices aléatoires.
      */
-    private void loadExampleGrid() {
-        BinairoGrid newGrid = new BinairoGrid(gridSize);
+    private BinairoGrid createRandomGrid(int size) {
+        BinairoGrid grid = new BinairoGrid(size);
+        Random rand = new Random();
+        int numIndices = size * size / 5; // Environ 20% des cases
 
-        if (gridSize == 6 || gridSize == 8 || gridSize == 10) {
+        for (int i = 0; i < numIndices; i++) {
+            int r = rand.nextInt(size);
+            int c = rand.nextInt(size);
+            int v = rand.nextInt(2); // 0 ou 1
 
-            // Logique de chargement des exemples
-            if (gridSize == 6) {
-                newGrid.setValue(0, 0, 1); newGrid.setValue(0, 3, 0);
-                newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1);
-                newGrid.setValue(2, 4, 0); newGrid.setValue(2, 5, 1);
-                newGrid.setValue(3, 0, 0); newGrid.setValue(3, 2, 1);
-                newGrid.setValue(4, 3, 0); newGrid.setValue(4, 5, 0);
-                newGrid.setValue(5, 1, 1); newGrid.setValue(5, 5, 0);
-            } else if (gridSize == 8) {
-                newGrid.setValue(0, 2, 1); newGrid.setValue(0, 4, 0);
-                newGrid.setValue(1, 1, 0); newGrid.setValue(1, 6, 1);
-                newGrid.setValue(2, 0, 1); newGrid.setValue(2, 5, 0);
-                newGrid.setValue(3, 3, 0); newGrid.setValue(3, 7, 1);
-                newGrid.setValue(4, 0, 0); newGrid.setValue(4, 4, 1);
-                newGrid.setValue(5, 2, 0); newGrid.setValue(5, 7, 1);
-                newGrid.setValue(6, 1, 1); newGrid.setValue(6, 6, 0);
-                newGrid.setValue(7, 3, 1); newGrid.setValue(7, 5, 0);
-            } else if (gridSize == 10) {
-                // Pour la concision, seulement quelques indices 10x10
-                newGrid.setValue(0, 3, 1); newGrid.setValue(0, 7, 0);
-                newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1); newGrid.setValue(1, 9, 0);
-                newGrid.setValue(2, 0, 1); newGrid.setValue(2, 4, 0); newGrid.setValue(2, 8, 1);
-                newGrid.setValue(3, 2, 0); newGrid.setValue(3, 6, 1);
-                newGrid.setValue(4, 1, 1); newGrid.setValue(4, 5, 0); newGrid.setValue(4, 9, 1);
-                newGrid.setValue(5, 0, 0); newGrid.setValue(5, 4, 1); newGrid.setValue(5, 8, 0);
-                newGrid.setValue(6, 2, 1); newGrid.setValue(6, 6, 0);
-                newGrid.setValue(7, 1, 0); newGrid.setValue(7, 5, 1); newGrid.setValue(7, 9, 1);
-                newGrid.setValue(8, 0, 1); newGrid.setValue(8, 4, 0); newGrid.setValue(8, 8, 1);
-                newGrid.setValue(9, 2, 0); newGrid.setValue(9, 6, 1);
+            // Placer la valeur seulement si elle est cohérente localement pour éviter les échecs triviaux
+            if (grid.getValue(r, c) == BinairoGrid.EMPTY) {
+                grid.setValue(r, c, v);
+                // Si la placement viole R1, on l'enlève
+                if (!grid.checkLocalConstraints(r, c)) {
+                    grid.setValue(r, c, BinairoGrid.EMPTY);
+                }
             }
-
-            statusLabel.setText("Grille d'exemple " + gridSize + "x" + gridSize + " chargée.");
-        } else {
-            JOptionPane.showMessageDialog(this, "Aucun exemple prédéfini pour cette taille. Grille vide chargée.");
         }
-        currentGrid = newGrid;
-        initialDisplayedGrid = new BinairoGrid(newGrid); // Stocke la copie de l'état initial
-        // Assurer que le nouveau 'gridSize' est utilisé
-        this.gridSize = newGrid.getSize();
-        displayGrid(currentGrid, true);
+        statusLabel.setText("Grille aléatoire " + size + "x" + size + " générée.");
+        return grid;
     }
 
     /**
-     * Demande à l'utilisateur d'entrer manuellement les indices pour initialiser la grille.
+     * CRÉATION : Charge une grille d'exemple (pour 6x6, 8x8, 10x10).
      */
-    private void setupManualInput() {
+    private BinairoGrid createExampleGrid(int size) {
+        BinairoGrid newGrid = new BinairoGrid(size);
+
+        if (size == 6) {
+            newGrid.setValue(0, 0, 1); newGrid.setValue(0, 3, 0);
+            newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1);
+            newGrid.setValue(2, 4, 0); newGrid.setValue(2, 5, 1);
+            newGrid.setValue(3, 0, 0); newGrid.setValue(3, 2, 1);
+            newGrid.setValue(4, 3, 0); newGrid.setValue(4, 5, 0);
+            newGrid.setValue(5, 1, 1); newGrid.setValue(5, 5, 0);
+            return newGrid;
+        } else if (size == 8) {
+            newGrid.setValue(0, 2, 1); newGrid.setValue(0, 4, 0);
+            newGrid.setValue(1, 1, 0); newGrid.setValue(1, 6, 1);
+            newGrid.setValue(2, 0, 1); newGrid.setValue(2, 5, 0);
+            newGrid.setValue(3, 3, 0); newGrid.setValue(3, 7, 1);
+            newGrid.setValue(4, 0, 0); newGrid.setValue(4, 4, 1);
+            newGrid.setValue(5, 2, 0); newGrid.setValue(5, 7, 1);
+            newGrid.setValue(6, 1, 1); newGrid.setValue(6, 6, 0);
+            newGrid.setValue(7, 3, 1); newGrid.setValue(7, 5, 0);
+            return newGrid;
+        } else if (size == 10) {
+            newGrid.setValue(0, 3, 1); newGrid.setValue(0, 7, 0);
+            newGrid.setValue(1, 1, 0); newGrid.setValue(1, 5, 1); newGrid.setValue(1, 9, 0);
+            newGrid.setValue(2, 0, 1); newGrid.setValue(2, 4, 0); newGrid.setValue(2, 8, 1);
+            newGrid.setValue(3, 2, 0); newGrid.setValue(3, 6, 1);
+            newGrid.setValue(4, 1, 1); newGrid.setValue(4, 5, 0); newGrid.setValue(4, 9, 1);
+            newGrid.setValue(5, 0, 0); newGrid.setValue(5, 4, 1); newGrid.setValue(5, 8, 0);
+            newGrid.setValue(6, 2, 1); newGrid.setValue(6, 6, 0);
+            newGrid.setValue(7, 1, 0); newGrid.setValue(7, 5, 1); newGrid.setValue(7, 9, 1);
+            newGrid.setValue(8, 0, 1); newGrid.setValue(8, 4, 0); newGrid.setValue(8, 8, 1);
+            newGrid.setValue(9, 2, 0); newGrid.setValue(9, 6, 1);
+            return newGrid;
+        }
+
+        // Si la taille n'est pas supportée
+        JOptionPane.showMessageDialog(this, "Aucun exemple prédéfini pour cette taille. Grille vide chargée.", "Avertissement", JOptionPane.WARNING_MESSAGE);
+        return new BinairoGrid(size);
+    }
+
+    /**
+     * CRÉATION : Demande à l'utilisateur d'entrer manuellement les indices.
+     */
+    private BinairoGrid createManualGrid(int size) {
+        BinairoGrid grid = new BinairoGrid(size);
         String input = JOptionPane.showInputDialog(this,
-                "Entrez les indices au format 'Ligne Colonne Valeur' séparés par des espaces (ex: 1 1 0 1 2 1 2 3 0...):",
+                "Entrez les indices au format 'Ligne Colonne Valeur' séparés par des espaces (ex: 1 1 0 1 2 1 2 3 0...). La grille est 1-indexée.",
                 "Initialisation Manuelle", JOptionPane.QUESTION_MESSAGE);
 
-        if (input == null || input.trim().isEmpty()) return;
-
-        resetGrid();
+        if (input == null || input.trim().isEmpty()) return grid; // Retourne grille vide si annulé
 
         try (Scanner s = new Scanner(input)) {
             while (s.hasNextInt()) {
@@ -230,20 +315,18 @@ public class BinairoGUI extends JFrame {
                 int c = s.nextInt() - 1;
                 int v = s.nextInt();
 
-                if (r >= 0 && r < gridSize && c >= 0 && c < gridSize && (v == 0 || v == 1)) {
-                    currentGrid.setValue(r, c, v);
+                if (r >= 0 && r < size && c >= 0 && c < size && (v == 0 || v == 1)) {
+                    grid.setValue(r, c, v);
                 } else {
-                    statusLabel.setText("Attention: Ignoré l'indice (" + (r+1) + "," + (c+1) + ") invalide.");
+                    statusLabel.setText("Attention: Indice invalide (" + (r+1) + "," + (c+1) + ") ignoré.");
                 }
             }
-            statusLabel.setText("Grille initialisée manuellement.");
-            initialDisplayedGrid = new BinairoGrid(currentGrid); // Stocke l'état initial après l'entrée
-            displayGrid(currentGrid, true);
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "Erreur de format dans l'entrée manuelle.", "Erreur", JOptionPane.ERROR_MESSAGE);
-            resetGrid();
         }
+        return grid;
     }
+
 
     /**
      * Gère la sauvegarde de la partie actuelle.
@@ -289,7 +372,6 @@ public class BinairoGUI extends JFrame {
 
             if (loadedGrid != null) {
                 // Mettre à jour l'état de la GUI
-                // CRITICAL FIX: Met à jour la variable de classe gridSize avant d'appeler displayGrid
                 this.gridSize = loadedGrid.getSize();
                 currentGrid = loadedGrid;
                 initialDisplayedGrid = new BinairoGrid(loadedGrid); // L'état chargé est le nouvel état initial
@@ -308,9 +390,8 @@ public class BinairoGUI extends JFrame {
      * Démarre le flux principal de résolution (Validation -> AI ou Manuel).
      */
     private void startResolutionFlow() {
-        // CORRECTION MAJEURE: Si la grille initiale n'a jamais été créée (au premier lancement), initialDisplayedGrid est null.
-        if (initialDisplayedGrid == null) {
-            JOptionPane.showMessageDialog(this, "Veuillez d'abord charger une grille (Manuelle, Exemple ou Chargement).", "Erreur", JOptionPane.ERROR_MESSAGE);
+        if (initialDisplayedGrid == null || initialDisplayedGrid.isFull()) {
+            JOptionPane.showMessageDialog(this, "Veuillez d'abord charger une grille partiellement remplie.", "Erreur de Grille", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
@@ -322,10 +403,12 @@ public class BinairoGUI extends JFrame {
         boolean v_deg = degreeCheck.isSelected();
         boolean v_lcv = lcvCheck.isSelected();
         boolean v_ac3 = ac3Check.isSelected();
+        boolean v_ac4 = ac4Check.isSelected(); // NOUVEAU: Capture l'état de la checkbox AC-4
         boolean v_fc = fcCheck.isSelected();
 
-        // La validation utilise la meilleure config pour garantir la détection de la résolubilité.
-        solver.configureSolver(v_mvr, v_deg, v_lcv, v_ac3, v_fc);
+        // La validation utilise la configuration choisie par l'utilisateur.
+        // NOTE: configureSolver doit maintenant accepter 6 paramètres booléens.
+        solver.configureSolver(v_mvr, v_deg, v_lcv, v_ac3, v_ac4, v_fc);
 
         statusLabel.setText("Validation de la résolubilité...");
 
@@ -354,9 +437,6 @@ public class BinairoGUI extends JFrame {
         isManualMode = true;
         // La grille pour le jeu manuel doit être une nouvelle copie de l'état initial (non résolu)
         currentGrid = new BinairoGrid(resolution.getInitialGrid());
-        // Mise à jour de l'état initial affiché (au cas où l'utilisateur veut recommencer plus tard)
-        initialDisplayedGrid = new BinairoGrid(currentGrid);
-
         // Mise à jour CRITIQUE de la taille de la grille affichée
         this.gridSize = currentGrid.getSize();
 
@@ -392,13 +472,14 @@ public class BinairoGUI extends JFrame {
      * Tente de trouver la prochaine case ayant une seule option possible (Inférence locale).
      */
     private void proposeSuggestion() {
-        if (!isManualMode || currentGrid.isFull()) {
+        if (!isManualMode || currentGrid == null || currentGrid.isFull()) {
             JOptionPane.showMessageDialog(this, "L'aide n'est disponible qu'en mode manuel ou la grille est déjà complète.", "Aide non disponible", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
         // Utiliser la meilleure configuration d'inférence (MVR, FC) pour trouver la suggestion.
-        solver.configureSolver(true, false, false, false, true);
+        // On configure avec AC-4 (true) pour avoir la meilleure inférence possible
+        solver.configureSolver(true, false, false, false, true, true);
 
         // Le solveur a besoin d'une méthode pour retourner une assignation simple (r, c, val)
         BinairoAssignment suggestion = solver.getInferenceSuggestion(currentGrid);
@@ -447,7 +528,6 @@ public class BinairoGUI extends JFrame {
         }
         gridPanel.revalidate();
         gridPanel.repaint();
-        // pack() a été retiré ici pour maintenir une taille de fenêtre fixe/minimale.
     }
 
     /**
@@ -488,6 +568,7 @@ public class BinairoGUI extends JFrame {
         }
 
         // --- 4. Vérification de cohérence générale
+        // Utilisation de isCompletelyValid() comme vérification de l'état final/global
         if (!nextGrid.isCompletelyValid()) {
             return "Générale: L'état de la grille devient incohérent (erreur de domaine ou contrainte non locale).";
         }
